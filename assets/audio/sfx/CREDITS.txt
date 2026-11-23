@@ -1,0 +1,7 @@
+REDLINE sound effects (all CC0 / public domain; credit not required)
+- Gunshots (g_*): "The Free Firearm Sound Library" (Prepared SFX Library), OpenGameArt, CC0
+  https://opengameart.org/content/the-free-firearm-sound-library
+- Reloads (r_*): "Gun reload sounds", OpenGameArt, CC0
+  https://opengameart.org/content/gun-reload-sounds
+- UI (pickup, ui, chat, pause, elim, rankup, empty, use, win, lose): Kenney "Interface Sounds", CC0 — www.kenney.nl
+- Impacts (drop, land, landhard, death, fall, mantle, hit): Kenney "Impact Sounds", CC0 — www.kenney.nl
