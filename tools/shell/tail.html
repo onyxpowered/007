@@ -1,0 +1,229 @@
+
+
+<script>
+(async function () {
+  var WORKER_PREAMBLE = "(function () {\n  var pending = Object.create(null), seq = 0;\n  var OrigFetch = self.fetch ? self.fetch.bind(self) : null;\n  var MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', ktx2: 'image/ktx2', wasm: 'application/wasm', js: 'text/javascript' };\n  self.addEventListener('message', function (e) {\n    var d = e.data;\n    if (d && d.__mtlAssetRes !== undefined) {\n      e.stopImmediatePropagation();\n      var p = pending[d.__mtlAssetRes];\n      delete pending[d.__mtlAssetRes];\n      if (!p) return;\n      if (d.buf) {\n        var ext = (p.path.split('.').pop() || '').toLowerCase();\n        p.resolve(new Response(d.buf, { status: 200, headers: MIME[ext] ? { 'Content-Type': MIME[ext] } : {} }));\n      } else {\n        p.fallback();\n      }\n    }\n  });\n  function norm(u) {\n    try { return new URL(u, 'file:///').pathname.replace(/\\/{2,}/g, '/'); } catch (err) { return null; }\n  }\n  self.fetch = function (input, init) {\n    var u = typeof input === 'string' ? input : (input && input.url) || String(input);\n    if (/^(data|blob):/.test(u) || !OrigFetch) return OrigFetch ? OrigFetch(input, init) : Promise.reject(new TypeError('no fetch'));\n    var path = norm(u);\n    if (!path) return OrigFetch(input, init);\n    return new Promise(function (resolve, reject) {\n      var id = ++seq;\n      pending[id] = { path: path, resolve: resolve, fallback: function () { OrigFetch(input, init).then(resolve, reject); } };\n      self.postMessage({ __mtlAssetReq: id, path: path });\n    });\n  };\n})();";
+  var MIME_BY_EXT = {
+    m4a: 'audio/mp4',
+    js: 'text/javascript', css: 'text/css', wasm: 'application/wasm',
+    ogg: 'audio/ogg', mp3: 'audio/mpeg', wav: 'audio/wav',
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    ktx2: 'image/ktx2', drc: 'application/octet-stream',
+    font: 'application/octet-stream', icon: 'application/octet-stream'
+  };
+  function mimeFor(path) {
+    var ext = (path.split('.').pop() || '').toLowerCase();
+    return MIME_BY_EXT[ext] || 'application/octet-stream';
+  }
+
+  var map = {};
+  var links = Array.prototype.slice.call(document.querySelectorAll('script[data-metal-path]'));
+  var resolved = 0;
+  await Promise.all(links.map(async function (el) {
+    var path = el.getAttribute('data-metal-path');
+    try {
+      var resp = await fetch('data:application/octet-stream;base64,' + el.textContent.trim());
+      var buf = await new Response(el.hasAttribute('data-gz') ? resp.body.pipeThrough(new DecompressionStream('gzip')) : resp.body).arrayBuffer();
+      el.remove();
+      var blob = new Blob([buf], { type: mimeFor(path) });
+      map[path] = URL.createObjectURL(blob);
+    } catch (err) {
+      console.error('REDLINE.mtl: failed to resolve asset', path, err);
+    } finally {
+      resolved++;
+      window.rlBoot && rlBoot.set(resolved / links.length * 45);
+      if (resolved % 50 === 0 || resolved === links.length) {
+        console.log('REDLINE.mtl: resolved ' + resolved + '/' + links.length + ' assets');
+      }
+    }
+  }));
+
+  function resolvePath(url) {
+    if (typeof url !== 'string') {
+      try { url = url.url; } catch (e) { return null; }
+    }
+    if (map[url]) return map[url];
+    try {
+      var abs = new URL(url, document.baseURI);
+      var normalizedPath = abs.pathname.replace(/\/{2,}/g, '/');
+      if (map[abs.pathname]) return map[abs.pathname];
+      if (map[normalizedPath]) return map[normalizedPath];
+    } catch (e) {}
+    return null;
+  }
+
+  // dynamic import() calls bypass window.fetch entirely, so give the
+  // module loader its own resolution table for every known asset path.
+  var importMapEl = document.createElement('script');
+  importMapEl.type = 'importmap';
+  importMapEl.textContent = JSON.stringify({ imports: map });
+  document.head.appendChild(importMapEl);
+
+  var OriginalFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    var resolved = resolvePath(input);
+    if (resolved) return OriginalFetch(resolved, init);
+    return OriginalFetch(input, init);
+  };
+
+  // Safari/iOS report no createImageBitmap support, so the texture loader falls
+  // back to `new Image(); img.src = url`. An element load never goes through
+  // window.fetch, so it escapes the patch above and hits file:// for real.
+  // Rewrite image src at the property/attribute level too.
+  ['src', 'href'].forEach(function (prop) {
+    [window.HTMLImageElement, window.HTMLLinkElement, window.HTMLAudioElement, window.HTMLSourceElement]
+      .forEach(function (ctor) {
+        if (!ctor) return;
+        var desc = Object.getOwnPropertyDescriptor(ctor.prototype, prop);
+        if (!desc || !desc.set) return;
+        Object.defineProperty(ctor.prototype, prop, {
+          configurable: true,
+          enumerable: desc.enumerable,
+          get: function () { return desc.get.call(this); },
+          set: function (v) { desc.set.call(this, resolvePath(v) || v); }
+        });
+      });
+  });
+  var OrigSetAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (name, value) {
+    if (name === 'src' || name === 'href') {
+      var r = resolvePath(value);
+      if (r) return OrigSetAttribute.call(this, name, r);
+    }
+    return OrigSetAttribute.call(this, name, value);
+  };
+
+  // Worker threads run in their own JS realm: they never see this page's
+  // fetch()/Worker() patches or import map. Some worker scripts locate their
+  // wasm helper libs (draco, glyph, basis...) via a runtime-computed
+  // dynamic import()/fetch() path built from a template literal, derived
+  // from the geometry URL they're asked to decode. There's no hooking a
+  // bare import() call from outside, so rewrite those template literals in
+  // the worker source itself to point straight at the already-resolved
+  // blob URLs before the worker is ever constructed.
+  function escapeRegExp(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+  var libSuffixes = Object.keys(map)
+    .filter(function (k) { return k.indexOf('/assets/libs/') === 0; })
+    .map(function (k) { return k.slice('/assets/libs/'.length); });
+  // Inside a file:// worker, blob: URLs can neither be import()ed ("Not
+  // allowed to load local resource") nor fetch()ed ("URL scheme blob is not
+  // supported"), so every lib a worker pulls in at runtime is referenced by
+  // a self-contained data: URL instead.
+  function bufToBase64(buf) {
+    var bytes = new Uint8Array(buf);
+    var bin = '';
+    for (var bi = 0; bi < bytes.length; bi += 0x8000) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(bi, bi + 0x8000));
+    }
+    return btoa(bin);
+  }
+  var libReplacement = {};
+  for (var li = 0; li < libSuffixes.length; li++) {
+    var lsuf = libSuffixes[li];
+    var lkey = '/assets/libs/' + lsuf;
+    if (lsuf.slice(-3) === '.js') {
+      var ltext = await (await OriginalFetch(map[lkey])).text();
+      // Emscripten wrappers do new URL('x.wasm', import.meta.url) eagerly;
+      // a data: module has no usable base, so hand it a valid dummy one.
+      ltext = ltext.split('import.meta.url').join(JSON.stringify('file:///assets/libs/' + lsuf));
+      libReplacement[lsuf] = 'data:text/javascript;charset=utf-8,' + encodeURIComponent(ltext);
+    } else {
+      var lbuf = await (await OriginalFetch(map[lkey])).arrayBuffer();
+      libReplacement[lsuf] = 'data:application/wasm;base64,' + bufToBase64(lbuf);
+    }
+  }
+  var jsKeys = Object.keys(map).filter(function (k) { return k.slice(-3) === '.js'; });
+  for (var ji = 0; ji < jsKeys.length; ji++) {
+    var jk = jsKeys[ji];
+    try {
+      var jtext = await (await OriginalFetch(map[jk])).text();
+      var patched = jtext;
+      for (var si = 0; si < libSuffixes.length; si++) {
+        var suf = libSuffixes[si];
+        var re = new RegExp('`\\$\\{[a-zA-Z_$][\\w$]*\\}' + escapeRegExp(suf) + '`', 'g');
+        patched = patched.replace(re, function () { return JSON.stringify(libReplacement[suf]); });
+      }
+      if (jk.indexOf('/assets/') === 0 && jk.split('/').length === 3 && jk.indexOf('worker-') > 0) {
+        patched = WORKER_PREAMBLE + String.fromCharCode(10) + patched;
+      }
+      if (patched !== jtext) {
+        map[jk] = URL.createObjectURL(new Blob([patched], { type: 'text/javascript' }));
+        console.log('REDLINE.mtl: patched worker-lib refs in ' + jk);
+      }
+    } catch (err) {
+      console.error('REDLINE.mtl: failed to patch worker refs in', jk, err);
+    }
+  }
+
+  var OriginalWorker = window.Worker;
+  var workerCounter = 0;
+  window.Worker = function (url, opts) {
+    var resolved = resolvePath(url);
+    var label = (url.split('/').pop() || url) + '#' + (++workerCounter);
+    console.log('REDLINE.mtl: Worker(' + url + ') -> ' + (resolved || '(unresolved, using original)') + ' [' + label + ']');
+    var w = new OriginalWorker(resolved || url, opts);
+    var OrigPostMessage = w.postMessage.bind(w);
+    w.addEventListener('message', function (e) {
+      var d = e.data;
+      if (!d || d.__mtlAssetReq === undefined) return;
+      e.stopImmediatePropagation();
+      var blobUrl = resolvePath(d.path);
+      if (!blobUrl) { OrigPostMessage({ __mtlAssetRes: d.__mtlAssetReq, notFound: true }); return; }
+      OriginalFetch(blobUrl).then(function (r) { return r.arrayBuffer(); }).then(function (buf) {
+        OrigPostMessage({ __mtlAssetRes: d.__mtlAssetReq, buf: buf }, [buf]);
+      }, function () { OrigPostMessage({ __mtlAssetRes: d.__mtlAssetReq, notFound: true }); });
+    });
+    w.addEventListener('error', function (e) {
+      console.error('REDLINE.mtl: worker error [' + label + ']', e.message, e.filename, e.lineno);
+    });
+    w.addEventListener('messageerror', function (e) {
+      console.error('REDLINE.mtl: worker messageerror [' + label + ']', e);
+    });
+    w.postMessage = function (data, transfer) {
+      try {
+        console.log('REDLINE.mtl: -> [' + label + ']', data && data.url, data && data.id, data && Object.keys(data));
+      } catch (e) {}
+      return OrigPostMessage(data, transfer);
+    };
+    w.addEventListener('message', function (e) {
+      try {
+        var d = e.data;
+        console.log('REDLINE.mtl: <- [' + label + ']', d && d.id, d && d.error, d && Object.keys(d));
+      } catch (err) {}
+    });
+    return w;
+  };
+  window.Worker.prototype = OriginalWorker.prototype;
+
+  var cssUrl = map['/assets/style-BgpnrCnL.css'];
+  if (cssUrl) {
+    var link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = cssUrl;
+    document.head.appendChild(link);
+  }
+
+  var appUrl = map['/assets/App3D-DwM1eiaC.js'];
+  var webglUrl = map['/assets/webgl-CS4l6lxD.js'];
+  if (!appUrl || !webglUrl) {
+    console.error('REDLINE.mtl: core bundle missing from asset map', { appUrl: appUrl, webglUrl: webglUrl });
+    return;
+  }
+
+  window.__metalDebug = { map: map, resolvePath: resolvePath };
+  console.log('REDLINE.mtl bootstrap: resolved ' + Object.keys(map).length + ' assets');
+
+  var webglSource = await (await OriginalFetch(webglUrl)).text();
+  var patchedSource = webglSource.replace('"./App3D-DwM1eiaC.js"', JSON.stringify(appUrl));
+  var patchedBlob = new Blob([patchedSource], { type: 'text/javascript' });
+  var patchedUrl = URL.createObjectURL(patchedBlob);
+  console.log('REDLINE.mtl bootstrap: importing app bundle');
+  await import(patchedUrl);
+  console.log('REDLINE.mtl bootstrap: app bundle imported, window.__webgl =', typeof window.__webgl);
+})().catch(function (err) {
+  console.error('REDLINE.mtl bootstrap failed:', err && (err.stack || err.message || err));
+});
+</script>
+
+</body>
+</html>

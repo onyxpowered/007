@@ -13,6 +13,15 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/ja
 
 http.createServer(async (req, res) => {
   try {
+    // dev tools: PUT /__save/<name> writes tools/out/<name> (this machine only)
+    if (req.method === 'PUT' && req.url.startsWith('/__save/')) {
+      const name = req.url.slice(8).split('?')[0];
+      if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress) || !/^[\w.-]{1,80}$/.test(name)) { res.writeHead(403); return res.end(); }
+      const chunks = []; for await (const c of req) chunks.push(c);
+      await fs.mkdir(join(ROOT, 'tools', 'out'), { recursive: true });
+      await fs.writeFile(join(ROOT, 'tools', 'out', name), Buffer.concat(chunks));
+      res.writeHead(200); return res.end('saved');
+    }
     let p = decodeURIComponent(req.url.split('?')[0]);
     if (p.endsWith('/')) p += 'index.html';
     const file = normalize(join(ROOT, p));

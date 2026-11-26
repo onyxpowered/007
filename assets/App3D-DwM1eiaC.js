@@ -34225,12 +34225,15 @@ var Ks, ta, fs, ia, na, sa, ra, Js, Zs, aa, Ki, kn, ps, Fi, zn, hi, Na, bs, Oa;
 // "high" otherwise. Override with ?quality=low|medium|high (remembered).
 // each graphics tier's settings (every key in every tier, so switching tiers
 // at runtime overwrites them all)
+// tiers (for 30 FPS at 1366 x 768 on the target device): shadow maps at most
+// 2048 (High was 8192, 64x the pixels), hard-edged shadow filtering, one step
+// lighter anti-aliasing, and resolution never stepped below 70 %
 function Presets(e) {
   return e === "low"
-    ? { tier: e, dpr: 0.8, shadowMap: 2048, followShadow: 1024, softShadows: !1, smaa: "low", minDPR: 0.45, remoteIK: 30, maxDPR: 1, far: 220, lootCull: 0.85, bots: 8, ambient: 0, botHalfRate: !1, frameCap: !0 }
+    ? { tier: e, bubble: 22, dpr: 0.8, shadowMap: 1024, followShadow: 1024, softShadows: !1, smaa: "low", minDPR: 0.7, remoteIK: 30, maxDPR: 1, far: 220, lootCull: 0.85, bots: 8, ambient: 0, botHalfRate: !1, frameCap: !0 }
     : e === "medium"
-      ? { tier: e, dpr: 1, shadowMap: 4096, followShadow: void 0, softShadows: !0, smaa: "medium", minDPR: 0.5, remoteIK: 35, maxDPR: 1.5, far: 420, lootCull: 1, bots: void 0, ambient: void 0, botHalfRate: void 0, frameCap: void 0 }
-      : { tier: e, dpr: 1.5, shadowMap: 8192, followShadow: void 0, softShadows: !0, smaa: "high", minDPR: 0.6, remoteIK: 1e3, maxDPR: 3, far: 900, lootCull: 2, bots: void 0, ambient: void 0, botHalfRate: void 0, frameCap: void 0 };
+      ? { tier: e, bubble: 28, dpr: 1, shadowMap: 2048, followShadow: 1024, softShadows: !1, smaa: "low", minDPR: 0.7, remoteIK: 35, maxDPR: 1.5, far: 420, lootCull: 1, bots: void 0, ambient: void 0, botHalfRate: void 0, frameCap: void 0 }
+      : { tier: e, bubble: 34, dpr: 1.5, shadowMap: 2048, followShadow: 2048, softShadows: !1, smaa: "medium", minDPR: 0.7, remoteIK: 1e3, maxDPR: 3, far: 900, lootCull: 2, bots: void 0, ambient: void 0, botHalfRate: void 0, frameCap: void 0 };
 }
 const Tuning = (() => {
   let e = null;
@@ -34322,8 +34325,9 @@ class adaptiveDPR {
     oe(this, fs, 0);
     oe(this, ia, 2);
     oe(this, na, 3);
-    oe(this, sa, 50);
-    oe(this, ra, 58);
+    // the target is a steady 30 at full (1366 x 768) resolution: drop below 27, back up from 34
+    oe(this, sa, 27);
+    oe(this, ra, 34);
     oe(this, Js, 0.1);
     oe(this, Zs, Tuning.minDPR);
     oe(this, aa, 4); // direction changes before it settles where it is
@@ -40088,10 +40092,18 @@ const global$1 = new globalWebGL();
 window.__F_GLOBAL = global$1;
 // Settings that used to need a reload, applied on the spot.
 const Graphics = {
+  // "full" resolution is 1366 x 768 (the target device): 100 % render scale
+  // means at most that many pixels, whatever the screen. A 1366 x 768 display
+  // renders at its native size; bigger and high-DPI screens render the same
+  // pixel count and scale it up. The slider (50-100 %) scales down from there.
+  FULL: 1366 * 768,
+  baseDPR(e) {
+    const i = Math.max(0.5, Math.min(1, (e || 100) / 100)), w = Math.max(1, window.innerWidth || 1366), h = Math.max(1, window.innerHeight || 768);
+    return Math.min(window.devicePixelRatio || 1, Tuning.maxDPR || 2, Math.sqrt(Graphics.FULL / (w * h))) * i;
+  },
   // render scale (50-100 %): the renderer's base pixel ratio
   scale(e) {
-    const i = Math.max(0.5, Math.min(1, (e || (Tuning.tier === "low" ? 50 : 100)) / 100));
-    ((global$1.baseDPR = Math.min(window.devicePixelRatio || 1, Tuning.maxDPR || 2) * i), global$1.setDPRMultiplier(global$1.adaptiveDPR ? global$1.adaptiveDPR.multiplier : 1));
+    ((global$1.baseDPR = Graphics.baseDPR(e)), global$1.setDPRMultiplier(global$1.adaptiveDPR ? global$1.adaptiveDPR.multiplier : 1));
   },
   // graphics quality: every tier setting, shadows, anti-aliasing, the planet
   quality(e) {
@@ -40142,6 +40154,9 @@ const Graphics = {
     return [...e];
   },
 };
+// the pixel budget depends on the window's size: re-apply it when that changes
+addEventListener("resize", () => global$1.baseDPR && Graphics.scale(+localStorage.getItem("rl_scale") || 0));
+
 class MultipleRenderPass extends Pass$1 {
   constructor({
     scene: e = null,
@@ -42936,7 +42951,8 @@ uniform float uFogDistance;
 uniform float uFogDensity;
 
 void addFog(inout vec3 outcolor, float lenCam) {
-    float fogFactor = 1.0 - exp(-uFogDensity * uFogDensity * lenCam * lenCam);
+    // a negative density is the render bubble (beta): clear to ~55% of its radius, sky-coloured at its edge
+    float fogFactor = uFogDensity < 0.0 ? smoothstep(-0.55 / uFogDensity, -1.0 / uFogDensity, lenCam) : 1.0 - exp(-uFogDensity * uFogDensity * lenCam * lenCam);
     float range1 = smoothstep(0.0, uFogDistance, fogFactor);
     float range2 = 1.0 - range1;
     vec3 fogColor = uFogColorNear * range2 + uFogColorFar * range1;
@@ -64523,7 +64539,7 @@ class Bout {
       window.addEventListener("keydown", (i) => i.code === "Escape" && (window.__Paused ? this.pause(!1) : this._canPause() && this.pause(!0))));
   }
   _canPause() {
-    return !(this.chat && this.chat.isOpen) && !this.lobby && !this.menu.isOpen && (this.inMatch || this.dropping || this.landing);
+    return !(this.chat && this.chat.isOpen) && !window.__MapOpen && !this.lobby && !this.menu.isOpen && (this.inMatch || this.dropping || this.landing);
   }
   pause(e, i = !1) {
     (Foley.play("pause"), Foley.wind(e ? 0 : this.dropping && this.dive ? this.dive.v : 0), e && Foley.storm(!1));
@@ -64974,7 +64990,7 @@ class Bout {
       const z = this.state;
       (!z || z.phase === "over") && Tuning.ambient !== 0 && this.bots.ambient(8);
     }
-    (this._menuShown || ((this._menuShown = !0), Tuning.tier === "low" && !localStorage.getItem("rl_scale") && !Vault.get("rl_tip_scale", 0) && setTimeout(() => (Vault.set("rl_tip_scale", 1), Trophies._toast(["", "Running at 50% render scale", "Low graphics keeps the game smooth here. Raise it in Settings.", "Tip", "note", { kind: "info", go: "settings" }])), 2500), this.menu.open(), this.setName(this.name), setTimeout(() => WhatsNew.maybeShow(), 900)), this.isHost && this._hostTick(), this.voice.update(), this._register(), this._chatListen());
+    (this._menuShown || ((this._menuShown = !0), !1 && setTimeout(() => (Vault.set("rl_tip_scale", 1), Trophies._toast(["", "Running at 50% render scale", "Low graphics keeps the game smooth here. Raise it in Settings.", "Tip", "note", { kind: "info", go: "settings" }])), 2500), this.menu.open(), this.setName(this.name), setTimeout(() => WhatsNew.maybeShow(), 900)), this.isHost && this._hostTick(), this.voice.update(), this._register(), this._chatListen());
     const s = Math.min(0.05, Delta()), a = e._collisionPhysics, o = e._localObject, c = e._camera;
     let pitch = 0, roll = 0, xw = 0, tuck = 0, lift = 0, fwd = 0;
     if (this.dropping) {
@@ -65055,18 +65071,31 @@ class Bout {
     this.dying ||
     ((o.__pitch = this.landing ? pitch : this._pitch.x), (o.__flare = this.dropping ? this._flare || 0 : 0), (o.__roll = this.landing ? 0 : this._roll.x), (o.__lift = lift), (o.__fwd = fwd), (o.__tuck = tuck), (o.__airBend = this.dropping || this.landing ? this._airBend || 0 : 0), (o.__flap = this.dropping ? this._flap || 0 : 0), (o.__dive = this.dropping ? Math.max(0, Math.min(1, this._x.x)) * (1 - (this._flare || 0)) : 0), (o.__bullet = _bb * (1 - (this._flare || 0))));
     // see far while falling from orbit, keep depth precision on the ground
-    const _far = this.dropping ? 2600 : Tuning.far || 700;
+    const _far = this.dropping ? 2600 : window.__Bubble ? 90 : Tuning.far || 700;
     // fog thins with height so the planet reads from far out
     {
-      const z = c.position.length() - this.R, A = 0.011 * Math.min(1, 35 / Math.max(35, z));
+      const z = c.position.length() - this.R, bub = window.__Beta && !this.dropping && !this.lobby && z < 30 ? Test.bubble || Tuning.bubble || 0 : 0;
+      window.__Bubble = bub;
+      // fog: fully the sky's colour at the bubble's edge, so its border is never seen
+      const A = bub ? -1 / bub : 0.011 * Math.min(1, 35 / Math.max(35, z));
       if (!this._fogMats || (this.dropping && performance.now() - this._fogScan > 2e3)) {
         ((this._fogScan = performance.now()), (this._fogMats = new Set()));
         this.scene.traverse((B) => {
           const Q = B.material;
-          (Array.isArray(Q) ? Q : Q ? [Q] : []).forEach((W) => W.uniforms && W.uniforms.uFogDensity && this._fogMats.add(W.uniforms.uFogDensity));
+          (Array.isArray(Q) ? Q : Q ? [Q] : []).forEach((W) => {
+            if (!W.uniforms || !W.uniforms.uFogDensity) return;
+            this._fogMats.add(W.uniforms.uFogDensity);
+            // beta: the fog takes the sky's horizon colours (Skies keeps them in step)
+            window.__Beta && W.uniforms.uFogColorNear && Skies.fog.add(W.uniforms);
+          });
         });
       }
-      Math.abs(A - (this._fogD || 0)) > 1e-5 && ((this._fogD = A), this._fogMats.forEach((B) => (B.value = A)));
+      Math.abs(A - (this._fogD ?? 0)) > 1e-5 && ((this._fogD = A), this._fogMats.forEach((B) => (B.value = A)));
+      // beta: sky, fog colours and sun follow the time of day and the weather
+      Skies.update(this, this.scene);
+      // FPS: the shadow map re-renders every other frame (half its cost; shadows lag one frame)
+      webglRenderer.webgl.shadowMap.autoUpdate = !Test.noshadow && (renderInfo.frame & 1) === 0;
+      Test.noshadow && !Test._shadowOff && this.scene.traverse((o) => o.isDirectionalLight && o.castShadow && ((o.castShadow = !1), (Test._shadowOff = !0)));
     }
     // the sky dome grows with you as you fall from far out (the post chain
     // breaks past ~500 m, so it stays inside that), back to normal on the ground
@@ -66761,9 +66790,10 @@ class Menu {
       s("Graphics quality", "quality", [["low", "Low"], ["medium", "Medium"], ["high", "High"]], Tuning.tier) +
       a("Game volume", "vol", 0, 100, 1, l.vol) +
       a("Music volume", "mvol", 0, 100, 1, l.mvol) +
+      (window.__Beta ? s("Time of day", "rltod", [["real", "Real time"], ["cycle", "Day cycle"], ["morning", "Morning"], ["day", "Day"], ["evening", "Evening"], ["night", "Night"]], localStorage.getItem("rl_tod") || "real") : "") +
       `<b>Performance</b>` +
       s("Frame rate", "rlfps", [["auto", "Auto"], ["30", "30"], ["60", "60"], ["max", "Max"]], localStorage.getItem("rl_fps") || "auto") +
-      a("Render scale %", "rlscale", 50, 100, 5, +(localStorage.getItem("rl_scale") || (Tuning.tier === "low" ? 50 : 100))) +
+      a("Render scale %", "rlscale", 50, 100, 5, +(localStorage.getItem("rl_scale") || 100)) +
       `<b>Feel</b>` +
       s("Invert look", "rlinv", [[1, "On"], [0, "Off"]], localStorage.getItem("rl_inv") === "1" ? 1 : 0) +
       s("Camera shake", "rlshake", [[1, "On"], [0, "Off"]], localStorage.getItem("rl_shake") === "0" ? 0 : 1) +
@@ -66781,7 +66811,7 @@ class Menu {
       i.querySelectorAll(".seg").forEach((h) => h.querySelectorAll("button").forEach((d) => (d.onclick = () => {
         (h.querySelectorAll("button").forEach((f) => f.classList.toggle("on", f === d)));
         const p = d.dataset.v, f = h.dataset.s;
-        /^rl/.test(f) ? (localStorage.setItem({ rlfps: "rl_fps", rlinv: "rl_inv", rlshake: "rl_shake", rldmg: "rl_dmg", rlhit: "rl_hit" }[f], p), (window.__Framerate = localStorage.getItem("rl_fps") || "auto")) : f === "view" ? (localStorage.setItem("rl_view", p), (e._camera.thirdPerson = p === "third"), (e._camera._viewChosen = !0)) : f === "quality" ? (localStorage.setItem("fused_quality", p), Graphics.quality(p), (this.el.querySelector('.settings [data-r="rlscale"]').value = +localStorage.getItem("rl_scale") || (p === "low" ? 50 : 100)), (this.el.querySelector('.settings [data-o="rlscale"]').textContent = this.el.querySelector('.settings [data-r="rlscale"]').value)) : f === "bots" ? this._apply({ bots: +p }) : f === "voice" ? this.match.voice.setMode(p) : f === "music" ? this._apply({ music: +p }) : this._apply({ fps: p === "1" });
+        /^rl/.test(f) ? (localStorage.setItem({ rlfps: "rl_fps", rlinv: "rl_inv", rlshake: "rl_shake", rldmg: "rl_dmg", rlhit: "rl_hit", rltod: "rl_tod" }[f], p), (window.__Framerate = localStorage.getItem("rl_fps") || "auto")) : f === "view" ? (localStorage.setItem("rl_view", p), (e._camera.thirdPerson = p === "third"), (e._camera._viewChosen = !0)) : f === "quality" ? (localStorage.setItem("fused_quality", p), Graphics.quality(p), (this.el.querySelector('.settings [data-r="rlscale"]').value = +localStorage.getItem("rl_scale") || (p === "low" ? 50 : 100)), (this.el.querySelector('.settings [data-o="rlscale"]').textContent = this.el.querySelector('.settings [data-r="rlscale"]').value)) : f === "bots" ? this._apply({ bots: +p }) : f === "voice" ? this.match.voice.setMode(p) : f === "music" ? this._apply({ music: +p }) : this._apply({ fps: p === "1" });
       }))),
       setTimeout(() => this._apply({}), 0));
   }
@@ -66895,6 +66925,7 @@ class Radar {
   }
   update() {
     const e = this.hud._fp && !this.match.lobby;
+    if (window.__HUD2) return void this.el.classList.toggle("on", !!e); // HUD 2 has its own (baked) minimap
     if ((this.el.classList.toggle("on", !!e), this._row < this.H && this._sample(), !e || !this.gl)) return;
     // canvas size follows the element (crisp on retina)
     const i = Math.min(2, window.devicePixelRatio || 1), s = Math.round(this.el.clientWidth * i) || 1;
@@ -67722,8 +67753,10 @@ class terrain {
         _v0$7.copy(l.position).divideScalar(c || 1),
         (this.mesh._instanceInfo[d].__dotCharacter = _v0$7.dot(_v1$4.normalize())));
     }
+    // the render bubble (beta): on the ground, chunks past its radius aren't drawn at all
+    const bub = window.__Bubble || 0;
     for (let d = 0; d < this.mesh._instanceInfo.length; d++)
-      if (this.mesh._instanceInfo[d].__dotCharacter < this.DOT_THRESHOLD || this.mesh._instanceInfo[d].__culled) {
+      if (this.mesh._instanceInfo[d].__dotCharacter < this.DOT_THRESHOLD || this.mesh._instanceInfo[d].__culled || (bub > 0 && this.mesh._instanceInfo[d].__distanceToCharacter > bub)) {
         this.mesh._instanceInfo[d].visible = !1;
         for (let f = 0; f < this.extraLODs; f++) this[`mesh${f + 1}`]._instanceInfo[d].visible = !1;
       } else {
@@ -68462,17 +68495,74 @@ class sky {
           uColor2: { value: new Color("#9fe2e0") },
           uColor3: { value: new Color("#b9ebea") },
           tCloudNoise: { value: textureLoader.load("clouds_noise_512.ktx2", "srgb-repeat") },
+          // beta sky: Drivian's evening / clear (its summer map's colours and cloud deck)
+          tSunClouds: { value: window.__Beta ? Object.assign(new TextureLoader().load("/assets/images/sky-clouds.webp"), { wrapS: RepeatWrapping, wrapT: RepeatWrapping }) : null },
+          uHorizon: { value: new Color(0xff9d5c) },
+          uZenith: { value: new Color(0x5ca2c1) },
+          uHaze: { value: new Color(0xff934d) },
+          uCloudHi: { value: new Color(0xedbf92) },
+          uCloudLo: { value: new Color(0xd3af97) },
+          uHazeAmt: { value: 0.35 },
+          uClouds: { value: 1 },
+          uMode2: { value: 1 },
+          uStars: { value: 0 },
         },
         vertexShader: `
                 varying vec2 vHighPrecisionZW;
                 varying vec2 vUv;
+                varying vec3 vWorld;
                 void main() {
                     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
                     vHighPrecisionZW = gl_Position.zw;
                     vUv = uv;
+                    vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
                 }
             `,
-        fragmentShader: `
+        fragmentShader: window.__Beta ? `
+                ${globalUBO_default}
+
+                layout(location = 1) out highp vec4 gInfo;
+
+                varying vec2 vHighPrecisionZW;
+                varying vec2 vUv;
+                varying vec3 vWorld;
+                uniform sampler2D tSunClouds;
+                uniform vec3 uHorizon, uZenith, uHaze, uCloudHi, uCloudLo;
+                uniform float uHazeAmt, uClouds, uMode2, uStars;
+
+                void main() {
+                    // up is away from the planet where you stand
+                    vec3 dir = normalize(vWorld - cameraPosition), up = normalize(cameraPosition);
+                    float e = dot(dir, up);
+                    // Drivian's sky: horizon colour to zenith colour by twice the elevation
+                    vec3 col = mix(uHorizon, uZenith, clamp(e * 2.0, 0.0, 1.0));
+                    col = mix(col, uHaze, (1.0 - smoothstep(0.0, 0.14, e)) * uHazeAmt);
+                    // its cloud deck: a shelf above you, two layers; its two looks
+                    // (mode 0: soft layered, mode 2: two-tone) blended by uMode2
+                    vec3 t1 = normalize(cross(up, abs(up.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))), t2 = cross(up, t1);
+                    vec2 p = vec2(dot(dir, t1), dot(dir, t2)) / max(e, 0.05);
+                    float t = time * 0.00001;
+                    vec4 c1 = texture2D(tSunClouds, p * 0.06 + vec2(t, 0.0));
+                    vec4 c2 = texture2D(tSunClouds, p * 0.16 + vec2(0.0, t * 1.6));
+                    vec4 c3 = texture2D(tSunClouds, p * 0.16 + vec2(0.001, -0.001) + vec2(0.0, t * 1.6));
+                    float dist = smoothstep(0.03, 0.4, e);
+                    // mode 0
+                    float ic = (1.0 - (1.0 - c1.a) * (1.0 - c2.a)) * c3.a;
+                    vec3 m0 = mix(uCloudLo, uCloudHi, c3.a * ic);
+                    // mode 2
+                    float a1 = c1.a, a2 = mix(0.25, 1.0, c2.a) * c1.a, a3 = c3.a * 0.5 * c1.a, ia = 1.0 - (1.0 - a1) * (1.0 - a2);
+                    vec3 m2 = mix(uCloudLo, uCloudHi * 1.5, clamp(a3 * dist * 2.0, 0.0, 1.0));
+                    vec3 cloud = mix(m0, m2, uMode2);
+                    float ca = mix(ic, ia, uMode2) * dist * uClouds;
+                    // stars, on clear nights, above the haze
+                    vec3 sd = floor(dir * 180.0);
+                    float h = fract(sin(dot(sd, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+                    col += vec3(smoothstep(0.996, 1.0, h)) * uStars * smoothstep(0.05, 0.3, e) * (1.0 - ca);
+                    col = mix(col, cloud, ca);
+                    gl_FragColor = vec4(col, 0.01);
+                    gInfo = vec4(1.0 - (0.5 * vHighPrecisionZW[0] / vHighPrecisionZW[1] + 0.5), vec2(0.0), 1.0);
+                }
+            ` : `
                 ${globalUBO_default}
 
                 layout(location = 1) out highp vec4 gInfo;
@@ -75840,8 +75930,7 @@ function App3D(r, e) {
         M ? o.show() : o.hide();
       }),
       customEase("tweaked", "M0,0 C0.388,0 0.441,0.356 0.496,0.496 0.553,0.641 0.647,1 1,1"));
-    const T =
-      Math.min(window.devicePixelRatio || 1, Tuning.maxDPR || 2) * Math.max(0.5, Math.min(1, (+localStorage.getItem("rl_scale") || (Tuning.tier === "low" ? 50 : 100)) / 100)); // low caps at 1x, high runs full retina; Settings > Render scale
+    const T = Graphics.baseDPR(+localStorage.getItem("rl_scale") || 0); // 100 % = 1366 x 768 pixels at most; Settings > Render scale
     await global$1.init({
       canvasCnt: get(h),
       interactionNode: i(),
@@ -76186,6 +76275,503 @@ const TouchPad = {
   },
 };
 (function boot() { document.body ? TouchPad.init() : document.addEventListener("DOMContentLoaded", () => TouchPad.init(), { once: !0 }); })();
+
+// ---------------------------------------------------------------------------
+// HUD 2 (beta). Frosted glass instead of solid black, Geist type, GravityUI
+// icons (MIT). Layout and feel inspired by Geckomacabre's GTA VI-style HUD for
+// FiveM (CC BY-NC-SA 4.0); the code and art here are REDLINE's own.
+//   top left      health and shield
+//   top right     players left, your eliminations, the storm clock
+//   bottom left   the minimap: the whole planet as one 3D model, built once at
+//                 load from a height map baked ahead of time (tools/mapbake.js ->
+//                 assets/images/minimap.png), seen from just behind you. Every
+//                 building, cliff and ramp is its real shape. M opens it as a big
+//                 map: click to set a waypoint, and a route follows the walkable
+//                 paths (the bots' nav network) on both maps
+//   right         your inventory, and under it the kill feed and chat
+// On for the dev server (localhost), beta builds (window.__RLBeta) and with
+// ?hud2; ?hud=1 turns it off.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Skies (beta): Drivian's summer skies, every time of day and both weathers
+// (its colours, cloud deck and light levels, from its own presets). Settings >
+// Time of day: Real time (your clock), Day cycle (each match runs morning to
+// night) or one fixed time. Weather is rolled per match from the match id, so
+// everyone in it sees the same sky. Each frame the sky dome, the fog and the
+// sun light take the blend of the two nearest presets.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Performance test switches (beta builds / localhost), to find what costs the
+// most on a given device. Combine freely, compare the FPS counter:
+//   ?bubble=6     render bubble radius in metres (6 is about the chunk you stand on)
+//   ?noshadow     no sun shadows at all
+//   ?nominimap    no minimap rendering
+//   ?noglass      HUD panels without the frosted blur
+// ---------------------------------------------------------------------------
+const Test = (() => {
+  const q = new URLSearchParams(location.search), b = +q.get("bubble");
+  return { bubble: b > 0 ? b : 0, noshadow: q.has("noshadow"), nominimap: q.has("nominimap"), noglass: q.has("noglass") };
+})();
+window.__Test = Test;
+const Skies = {
+  P: {"morning.clear": {"horizon": "#ffe59e", "zenith": "#5aa5bf", "haze": "#ffdab8", "hazeAmt": 0.15, "clouds": 0, "mode": 4, "hi": "#f3b353", "lo": "#6f4ea2", "sun": "#ced4d9", "sunI": 0.7, "amb": "#514e29", "ambI": 1.3}, "morning.overcast": {"horizon": "#ab9387", "zenith": "#71635b", "haze": "#524942", "hazeAmt": 0.41, "clouds": 1, "mode": 0, "hi": "#92979b", "lo": "#4c565f", "sun": "#cfb9b9", "sunI": 0.5, "amb": "#8a8a8a", "ambI": 0.9}, "day.clear": {"horizon": "#add8ff", "zenith": "#1a79ff", "haze": "#86b8fe", "hazeAmt": 0, "clouds": 1, "mode": 0, "hi": "#ffffff", "lo": "#dbcccc", "sun": "#fffde5", "sunI": 3.4, "amb": "#5f7686", "ambI": 1.7}, "day.overcast": {"horizon": "#c9d8ee", "zenith": "#cbd4f1", "haze": "#839bca", "hazeAmt": 0, "clouds": 1, "mode": 0, "hi": "#8c97a1", "lo": "#737d82", "sun": "#ebf3ff", "sunI": 1.3, "amb": "#7d7d7d", "ambI": 1.3}, "evening.clear": {"horizon": "#ff9d5c", "zenith": "#5ca3c1", "haze": "#ff944d", "hazeAmt": 0, "clouds": 1, "mode": 2, "hi": "#edbf92", "lo": "#d3af97", "sun": "#fee7d7", "sunI": 0.6, "amb": "#4b2b11", "ambI": 1.2}, "evening.overcast": {"horizon": "#a89f99", "zenith": "#807b6f", "haze": "#5c5c5c", "hazeAmt": 0.15, "clouds": 1, "mode": 0, "hi": "#787878", "lo": "#0d0d0d", "sun": "#f3e4d8", "sunI": 0.4, "amb": "#938566", "ambI": 0.8}, "night.clear": {"horizon": "#202031", "zenith": "#000000", "haze": "#000000", "hazeAmt": 0, "clouds": 0, "mode": 0, "hi": "#000000", "lo": "#616161", "sun": "#f6fefe", "sunI": 0.2, "amb": "#272a45", "ambI": 0.12}, "night.overcast": {"horizon": "#0d0d0d", "zenith": "#171717", "haze": "#000000", "hazeAmt": 0, "clouds": 1, "mode": 0, "hi": "#000000", "lo": "#666666", "sun": "#e6eaf2", "sunI": 0.05, "amb": "#e6eaf2", "ambI": 0.1}},
+  ORDER: ["morning", "day", "evening", "night"],
+  fog: new Set(),
+  _c: {},
+  col(k) { return this._c[k] || (this._c[k] = new Color(k)); },
+  // where we are in the day, 0..4 (0 morning, 1 day, 2 evening, 3 night, 4 morning again)
+  phase(M) {
+    const m = localStorage.getItem("rl_tod") || "real", i = this.ORDER.indexOf(m);
+    if (i >= 0) return i;
+    if (m === "cycle") {
+      const st = M && M.state, t0 = this._t0 && this._match === (st && st.n) ? this._t0 : ((this._match = st && st.n), (this._t0 = performance.now()));
+      return M && M.inMatch ? Math.min(3, ((performance.now() - t0) / 1000 / 540) * 3) : 1;
+    }
+    // real time: night until 5, morning by 7, day 10 to 16, evening by 19, night from 21
+    const d = new Date(), h = d.getHours() + d.getMinutes() / 60, K = [[0, 3], [5, 3], [7, 4], [10, 5], [16, 5], [19, 6], [21, 7], [24, 7]];
+    for (let k = 1; k < K.length; k++) if (h <= K[k][0]) { const a = K[k - 1], b = K[k], f = (h - a[0]) / (b[0] - a[0]); return (a[1] + (b[1] - a[1]) * f) % 4; }
+    return 3;
+  },
+  weather(M) {
+    const n = M && M.state && M.state.n;
+    if (!n || !M.inMatch) return "clear";
+    // ~70% clear, ~30% overcast, the same for everyone in the match
+    return (Math.imul(n ^ 0x9e3779b9, 2654435761) >>> 0) % 10 < 7 ? "clear" : "overcast";
+  },
+  update(M, scene) {
+    if (!window.__Beta || !scene) return;
+    const now = performance.now();
+    if (now - (this._at || 0) < 250) return;
+    this._at = now;
+    this._sky = this._sky && this._sky.parent ? this._sky : null;
+    this._sun = this._sun && this._sun.parent ? this._sun : null;
+    if (!this._sky || !this._sun) scene.traverse((o) => { o.name === "sky" && o.material && o.material.uniforms && o.material.uniforms.uStars && (this._sky = o); o.isDirectionalLight && (this._sun = o); });
+    const ph = this.phase(M), w = this.weather(M), i = Math.floor(ph) % 4, j = (i + 1) % 4, f = ph - Math.floor(ph), e = f * f * (3 - 2 * f);
+    const A = this.P[`${this.ORDER[i]}.${w}`], B = this.P[`${this.ORDER[j]}.${w}`];
+    const mixC = (k, out) => out.copy(this.col(A[k])).lerp(this.col(B[k]), e), mixN = (k) => A[k] + (B[k] - A[k]) * e;
+    if (this._sky) {
+      const u = this._sky.material.uniforms;
+      ["horizon", "zenith", "haze"].forEach((k) => mixC(k, u["u" + k[0].toUpperCase() + k.slice(1)].value));
+      mixC("hi", u.uCloudHi.value); mixC("lo", u.uCloudLo.value);
+      u.uHazeAmt.value = 0.2 + mixN("hazeAmt");
+      u.uClouds.value = mixN("clouds");
+      u.uMode2.value = (A.mode === 2 ? 1 : 0) * (1 - e) + (B.mode === 2 ? 1 : 0) * e;
+      u.uStars.value = w === "clear" ? (i === 3 ? 1 - e : j === 3 ? e : 0) : 0;
+    }
+    // the fog fades into the horizon
+    const near = this._near || (this._near = new Color()), far = this._far || (this._far = new Color());
+    mixC("horizon", far); mixC("haze", near); near.lerp(far, 0.5);
+    for (const u of this.fog) (u.uFogColorNear.value.copy(near), u.uFogColorFar.value.copy(far));
+    // the sun: brightness relative to a clear day (square-rooted: Drivian's
+    // scale is wider than REDLINE's toon light reads well at), and its colour
+    if (this._sun) {
+      this._base = this._base || this._sun.intensity;
+      this._sun.intensity = this._base * Math.max(0.12, Math.sqrt(mixN("sunI") / 3.4));
+      mixC("sun", this._sun.color);
+    }
+  },
+};
+window.__Beta = (() => { const q = location.search, h = location.hostname; return !/[?&]hud=1\b/.test(q) && (!!window.__RLBeta || /[?&](hud2|beta)\b/.test(q) || localStorage.getItem("rl_hud2") === "1" || h === "localhost" || h === "127.0.0.1"); })();
+const HUD2 = {
+  icons: {"heart": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M4.76 1.5c-1.278 0-2.365.459-3.127 1.296C.878 3.624.5 4.758.5 6.013c0 2.18 1.11 3.917 2.52 5.268 1.404 1.345 3.17 2.368 4.632 3.133a.75.75 0 0 0 .693.002c1.463-.757 3.228-1.788 4.633-3.14 1.41-1.355 2.522-3.098 2.522-5.263 0-1.26-.38-2.393-1.136-3.221-.763-.835-1.85-1.293-3.124-1.293-1.076 0-1.966.399-2.643 1.151A4.5 4.5 0 0 0 8 3.504a4.5 4.5 0 0 0-.597-.854C6.726 1.898 5.836 1.5 4.76 1.5\" clip-rule=\"evenodd\"/></svg>", "shield": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"m3.003 4.702 4.22-2.025a1.8 1.8 0 0 1 1.554 0l4.22 2.025a.89.89 0 0 1 .503.8V6a8.55 8.55 0 0 1-3.941 7.201l-.986.631a1.06 1.06 0 0 1-1.146 0l-.986-.63A8.55 8.55 0 0 1 2.5 6v-.498c0-.341.196-.652.503-.8m3.57-3.377L2.354 3.35A2.39 2.39 0 0 0 1 5.502V6a10.05 10.05 0 0 0 4.632 8.465l.986.63a2.56 2.56 0 0 0 2.764 0l.986-.63A10.05 10.05 0 0 0 15 6v-.498c0-.918-.526-1.755-1.354-2.152l-4.22-2.025a3.3 3.3 0 0 0-2.852 0M8.47 9.97a.75.75 0 1 0 1.06 1.06c.575-.574 1.118-1.398 1.516-2.195.386-.772.704-1.653.704-2.335a.75.75 0 0 0-1.5 0c0 .318-.182.937-.546 1.665-.352.703-.809 1.379-1.234 1.805\" clip-rule=\"evenodd\"/></svg>", "persons": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M5.5 6a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3m0 1.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-3.029 2.886c-.777.54-.971 1.063-.971 1.306 0 .446.362.808.808.808h6.384a.81.81 0 0 0 .808-.808c0-.244-.194-.767-.971-1.306C7.792 9.875 6.719 9.5 5.5 9.5s-2.292.375-3.029.886M0 11.692C0 9.846 2.475 8 5.5 8c1.18 0 2.278.281 3.177.734A5.67 5.67 0 0 1 11.5 8c2.475 0 4.5 1.538 4.5 3.077A1.923 1.923 0 0 1 14.077 13h-3.483c-.416.604-1.113 1-1.902 1H2.308A2.31 2.31 0 0 1 0 11.692m10.991-.192h3.086c.234 0 .423-.19.423-.423 0-.103-.096-.472-.688-.89-.554-.393-1.375-.687-2.312-.687-.517 0-.999.09-1.42.236.526.534.854 1.146.911 1.764M12.5 5a1 1 0 1 1-2 0 1 1 0 0 1 2 0M14 5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0\" clip-rule=\"evenodd\"/></svg>", "skull": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"m12.5 12 .614-.246A3 3 0 0 0 15 8.97V8A7 7 0 1 0 1 8v.969a3 3 0 0 0 1.886 2.785L3.5 12l1 3h7zm-2.081 1.5.658-1.974.22-.66.646-.259.614-.245a1.5 1.5 0 0 0 .943-1.393V8a5.5 5.5 0 1 0-11 0v.969a1.5 1.5 0 0 0 .943 1.393l.614.245.646.259.22.66.658 1.974h.544L6.5 12h1v1.5h1V12h1l.375 1.5zM9 8.4A1.4 1.4 0 0 1 10.4 7h.246a1.353 1.353 0 0 1 .223 2.688l-.515.086A1.163 1.163 0 0 1 9 8.628zM5.353 7a1.353 1.353 0 0 0-.222 2.688l.515.086A1.163 1.163 0 0 0 7 8.628V8.4A1.4 1.4 0 0 0 5.6 7z\" clip-rule=\"evenodd\"/></svg>", "target": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M8 13.5a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11M8 15A7 7 0 1 0 8 1a7 7 0 0 0 0 14m0-4.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5M8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8m0-3a1 1 0 1 0 0-2 1 1 0 0 0 0 2\" clip-rule=\"evenodd\"/></svg>", "storm": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M6.906 1.085a7 7 0 0 1 2.188 0 .75.75 0 0 1-.232 1.482 5.6 5.6 0 0 0-1.724 0 .75.75 0 0 1-.232-1.482M4.933 2.502a.75.75 0 0 1-.166 1.048c-.466.34-.878.75-1.217 1.217a.75.75 0 0 1-1.213-.882 7 7 0 0 1 1.548-1.548.75.75 0 0 1 1.048.165m6.135 0a.75.75 0 0 1 1.047-.165 7 7 0 0 1 1.548 1.548.75.75 0 0 1-1.213.882 5.5 5.5 0 0 0-1.217-1.217.75.75 0 0 1-.165-1.048M1.943 6.28a.75.75 0 0 1 .624.857 5.6 5.6 0 0 0 0 1.724.75.75 0 0 1-1.482.232 7 7 0 0 1 0-2.188.75.75 0 0 1 .858-.625m12.115 0a.75.75 0 0 1 .857.625 7 7 0 0 1 0 2.188.75.75 0 1 1-1.482-.232 5.5 5.5 0 0 0 0-1.724.75.75 0 0 1 .624-.857M2.502 11.068a.75.75 0 0 1 1.048.165c.34.466.75.878 1.217 1.217a.75.75 0 0 1-.882 1.213 7 7 0 0 1-1.548-1.548.75.75 0 0 1 .165-1.047m10.996 0a.75.75 0 0 1 .165 1.047 7 7 0 0 1-1.548 1.548.75.75 0 0 1-.883-1.213 5.5 5.5 0 0 0 1.218-1.217.75.75 0 0 1 1.048-.165m-7.217 2.99a.75.75 0 0 1 .857-.625 5.5 5.5 0 0 0 1.724 0 .75.75 0 0 1 .232 1.482 7 7 0 0 1-2.188 0 .75.75 0 0 1-.625-.857\" clip-rule=\"evenodd\"/></svg>", "chat": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"m4.843 10.944-.194 2.335a.204.204 0 0 0 .339.17l2.21-1.964.589.013L8 11.5c1.695 0 3.087-.44 4.02-1.177.89-.702 1.48-1.76 1.48-3.323s-.59-2.62-1.48-3.323C11.087 2.94 9.695 2.5 8 2.5s-3.087.44-4.02 1.177C3.09 4.38 2.5 5.437 2.5 7c0 1.648.656 2.742 1.648 3.448zm1.141 3.625 1.77-1.572Q7.875 13 8 13c3.866 0 7-2 7-6s-3.134-6-7-6-7 2-7 6c0 2.117.878 3.674 2.277 4.67l-.123 1.484a1.704 1.704 0 0 0 2.83 1.415\" clip-rule=\"evenodd\"/></svg>", "cube": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M13.5 5.475v4.946a1.5 1.5 0 0 1-.973 1.405l-4.777 1.79V7.53zm-.654-1.36a2 2 0 0 0-.175-.103L9.499 2.427a1.5 1.5 0 0 0-1.197-.063l-4.829 1.81q-.12.045-.23.11L7.05 6.185zM2.5 5.59l3.75 1.875v5.984l-2.92-1.46a1.5 1.5 0 0 1-.83-1.342zM1.267 4.343c-.173.38-.267.8-.267 1.236v5.067a3 3 0 0 0 1.658 2.683l3.172 1.586a3 3 0 0 0 2.395.126l4.828-1.811A3 3 0 0 0 15 10.421V5.354a3 3 0 0 0-1.658-2.683L10.17 1.085A3 3 0 0 0 7.775.959L2.947 2.77a3 3 0 0 0-1.48 1.203.75.75 0 0 0-.2.37\" clip-rule=\"evenodd\"/></svg>", "bolt": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" d=\"M9.453.489a.751.751 0 0 1 1.287.636l-.856 5.122 2.41.003c1.113 0 1.67 1.347.883 2.134L6.03 15.528a.75.75 0 0 1-1.258-.712l1.266-5.068-2.382.003c-1.095 0-1.662-1.307-.913-2.106z\"/></svg>", "plus": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M11 11v2.5A1.5 1.5 0 0 1 9.5 15h-3A1.5 1.5 0 0 1 5 13.5V11H2.5A1.5 1.5 0 0 1 1 9.5v-3A1.5 1.5 0 0 1 2.5 5H5V2.5A1.5 1.5 0 0 1 6.5 1h3A1.5 1.5 0 0 1 11 2.5V5h2.5A1.5 1.5 0 0 1 15 6.5v3a1.5 1.5 0 0 1-1.5 1.5z\" clip-rule=\"evenodd\"/></svg>", "arrow": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" d=\"m10.924 13.894 3.95-10.316a1.9 1.9 0 0 0-2.452-2.452L2.106 5.076a1.722 1.722 0 0 0 .163 3.27L6.5 9.5l1.154 4.231a1.722 1.722 0 0 0 3.27.163\"/></svg>", "clock": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M13.5 8a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0M15 8A7 7 0 1 1 1 8a7 7 0 0 1 14 0M8.75 4.5a.75.75 0 0 0-1.5 0V8a.75.75 0 0 0 .3.6l2 1.5a.75.75 0 1 0 .9-1.2l-1.7-1.275z\" clip-rule=\"evenodd\"/></svg>", "pin": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M11.247 1.5H4.5a3 3 0 0 0-2.69 1.672l5.96 3.793zM1.5 4.753V11.5a3 3 0 0 0 1.672 2.69l3.793-5.96zM4.753 14.5H11.5a3 3 0 0 0 3-3v-7a3 3 0 0 0-1.671-2.69L8.633 8.402z\" clip-rule=\"evenodd\"/></svg>", "route": "<svg fill=\"none\" viewBox=\"0 0 16 16\"><path fill=\"currentColor\" fill-rule=\"evenodd\" d=\"M12.25 5a1.25 1.25 0 1 0 0-2.5 1.25 1.25 0 0 0 0 2.5m0 1.5a2.75 2.75 0 0 1-2.646-2H4.577a.827.827 0 0 0-.238 1.619l7.753 2.326A2.327 2.327 0 0 1 11.423 13H6.397a2.751 2.751 0 1 1 0-1.5h5.026a.827.827 0 0 0 .238-1.619L3.908 7.556A2.327 2.327 0 0 1 4.577 3h5.027a2.751 2.751 0 1 1 2.646 3.5M5 12.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0\" clip-rule=\"evenodd\"/></svg>"},
+  names: { pistol: "Pistol", ar: "Assault Rifle", pump: "Pump Shotgun", smg: "SMG", sniper: "Sniper Rifle", minigun: "Minigun", burst: "Burst Rifle", cannon: "Hand Cannon", tactical: "Tactical Shotgun", rpg: "Rocket Launcher", shield: "Overdrive", medkit: "Med Shot", grenade: "Grenade", shock: "Shockwave" },
+  on() {
+    const q = location.search, h = location.hostname;
+    if (/[?&]hud=1\b/.test(q)) return !1;
+    return !!window.__RLBeta || /[?&]hud2\b/.test(q) || localStorage.getItem("rl_hud2") === "1" || h === "localhost" || h === "127.0.0.1";
+  },
+  init() {
+    if (this.el || !(window.__HUD2 = this.on())) return;
+    const I = this.icons, css = document.createElement("style");
+    css.textContent = `
+      :root { --g-fill: rgba(22,22,26,.30); --g-fill-hi: rgba(255,255,255,.16); --g-edge: rgba(255,255,255,.16); --g-blur: blur(10px);
+        --g-text: #fff; --g-dim: rgba(255,255,255,.62); --g-red: #ff4d5e; --g-blue: #7cc4ff; --g-green: #9ef0a8; }
+      body.rl-hud2 .fused-vitals, body.rl-hud2 .rl-bar, body.rl-hud2 .rl-map, body.rl-hud2 .fused-hotbar { display: none !important; }
+      .h2 { position: fixed; inset: 0; pointer-events: none; z-index: 41; font: 500 13px/1 var(--rl-font, Geist, system-ui); color: var(--g-text); -webkit-font-smoothing: antialiased; opacity: 0; transition: opacity .3s; }
+      .h2.on { opacity: 1; }
+      body.rl-ending .h2, body.rl-inmenu .h2, body.rl-diving .h2 { opacity: 0 !important; }
+      /* frosted glass, one recipe for every panel */
+      /* FPS: each blurred panel re-blurs the game behind it every frame, so only the
+         main panels are frosted; feed and chat bubbles are a plain translucent fill */
+      body.rl-hud2 .rl-feed div, body.rl-hud2 .rl-chat .log div, body.rl-hud2 .rl-chat .box { background: rgba(22,22,26,.62) !important; box-shadow: inset 0 0 0 1px var(--g-edge) !important; border-radius: 14px; }
+      .h2 .g { background: var(--g-fill) !important; -webkit-backdrop-filter: var(--g-blur); backdrop-filter: var(--g-blur);
+        box-shadow: inset 0 0 0 1px var(--g-edge), inset 0 1px 0 rgba(255,255,255,.10), 0 8px 24px rgba(0,0,0,.18) !important; border-radius: 14px; }
+      .h2 svg { display: block; width: 16px; height: 16px; flex: none; }
+      /* top left: health and shield */
+      .h2 .vit { position: absolute; left: 24px; top: 24px; padding: 12px 14px; display: grid; grid-template-columns: 16px 180px 30px; gap: 10px 10px; align-items: center; }
+      .h2 .vit .bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.14); overflow: hidden; position: relative; }
+      .h2 .vit .bar i, .h2 .vit .bar b { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; border-radius: inherit; }
+      .h2 .vit .bar b { background: rgba(255,255,255,.45); transition: width .5s cubic-bezier(.3,0,.2,1) .3s; }
+      .h2 .vit .bar i { transition: width .15s ease-out; }
+      .h2 .vit .hp .bar i { background: #fff; } .h2 .vit .hp.low .bar i { background: var(--g-red); } .h2 .vit .hp.low svg { color: var(--g-red); }
+      .h2 .vit .sh .bar i { background: var(--g-blue); } .h2 .vit .sh svg { color: var(--g-blue); }
+      .h2 .vit .n { font: 600 13px/1 var(--rl-font, Geist, system-ui); text-align: right; font-variant-numeric: tabular-nums; }
+      .h2 .vit .hp, .h2 .vit .sh { display: contents; }
+      /* top right: stats */
+      .h2 .stats { position: absolute; right: 24px; top: 24px; display: flex; gap: 8px; }
+      .h2 .pill { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; font: 600 15px/1 var(--rl-font, Geist, system-ui); font-variant-numeric: tabular-nums; }
+      .h2 .pill small { font: 500 12px/1 var(--rl-font, Geist, system-ui); color: var(--g-dim); }
+      .h2 .pill.kills svg { color: var(--g-green); }
+      .h2 .pill.storm.closing { color: #ffd0d5; } .h2 .pill.storm.closing svg { color: var(--g-red); }
+      .h2 .pop { animation: h2-pop .45s cubic-bezier(.2,.8,.2,1); } @keyframes h2-pop { 40% { transform: scale(1.12); } }
+      /* bottom left: minimap; M grows it into the big map */
+      .h2 .map { position: absolute; left: 24px; bottom: 24px; width: 260px; height: 170px; padding: 0; overflow: hidden; transform: none;
+        transition: left .5s cubic-bezier(.2,.8,.2,1), bottom .5s cubic-bezier(.2,.8,.2,1), width .5s cubic-bezier(.2,.8,.2,1), height .5s cubic-bezier(.2,.8,.2,1), transform .5s cubic-bezier(.2,.8,.2,1), border-radius .5s; }
+      .h2 .map canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; border-radius: inherit; }
+      .h2 .map::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px var(--g-edge); pointer-events: none; }
+      .h2 .map .me { position: absolute; width: 20px; height: 20px; margin: -10px 0 0 -10px; color: #fff; filter: drop-shadow(0 1px 3px rgba(0,0,0,.7)); }
+      .h2 .map .me svg { width: 20px; height: 20px; transform: rotate(-45deg); }
+      .h2 .map .tint { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 40%, rgba(255,79,160,.55)); opacity: 0; transition: opacity .4s; pointer-events: none; }
+      .h2.in-storm .map .tint { opacity: 1; }
+      .h2 .map .pulse { position: absolute; width: 38px; height: 38px; margin: -19px 0 0 -19px; border-radius: 50%; border: 2px solid #ff4fa0; opacity: 0; pointer-events: none; }
+      .h2.in-storm .map .pulse { animation: h2-pulse 1.2s ease-out infinite; }
+      @keyframes h2-pulse { from { transform: scale(.45); opacity: .9; } to { transform: scale(1.4); opacity: 0; } }
+      .h2 .shade { position: absolute; inset: 0; background: rgba(8,8,12,.38); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); opacity: 0; transition: opacity .45s; }
+      .h2.big .shade { opacity: 1; }
+      .h2.big .map { left: 50%; bottom: 50%; width: min(1120px, 84vw); height: min(700px, 78vh); transform: translate(-50%, 50%); border-radius: 22px; pointer-events: auto; cursor: crosshair; }
+      .h2.big .map.drag { cursor: grabbing; }
+      .h2 .maphint { position: absolute; left: 50%; bottom: calc(50% - min(350px, 39vh) + 16px); transform: translate(-50%, 8px); display: flex; gap: 14px; align-items: center; height: 36px; padding: 0 14px; font: 500 12px/1 var(--rl-font, Geist, system-ui); color: var(--g-dim); opacity: 0; transition: opacity .3s, transform .45s cubic-bezier(.2,.8,.2,1); }
+      .h2 .maphint b { color: #fff; font-weight: 600; }
+      .h2.big .maphint { opacity: 1; transform: translate(-50%, 0); transition-delay: .2s; }
+      .h2 .pill.wp { display: none; } .h2 .pill.wp.on { display: flex; } .h2 .pill.wp svg { color: #ff4fa0; }
+      body.rl-hud2.h2-big .fused-hud .xh, body.rl-hud2.h2-big .fused-hud .rl-xh { opacity: 0; }
+      /* right: inventory */
+      .h2 .inv { position: absolute; right: 24px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 4px; width: 236px; padding: 6px; }
+      .h2 .inv .slot { background: none !important; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none !important; border-radius: 10px; }
+      .h2 .slot { position: relative; display: grid; grid-template-columns: 16px 1fr auto; align-items: center; gap: 10px; height: 44px; padding: 0 12px 0 14px; transition: transform .2s cubic-bezier(.2,.8,.2,1), background .2s; }
+      .h2 .slot .k { position: absolute; left: -24px; font: 600 11px/1 var(--rl-font, Geist, system-ui); color: var(--g-dim); }
+      .h2 .slot b { font: 600 13px/1 var(--rl-font, Geist, system-ui); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .h2 .slot span { font: 600 13px/1 var(--rl-font, Geist, system-ui); font-variant-numeric: tabular-nums; color: var(--g-dim); }
+      .h2 .slot .ammo { position: absolute; left: 14px; right: 12px; bottom: 6px; height: 2px; border-radius: 1px; background: rgba(255,255,255,.12); overflow: hidden; }
+      .h2 .slot .ammo i { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(255,255,255,.7); }
+      .h2 .slot.empty { opacity: .45; } .h2 .slot.empty b { color: var(--g-dim); font-weight: 500; }
+      .h2 .slot.sel { background: var(--g-fill-hi) !important; }
+      .h2 .slot.sel span { color: #fff; } .h2 .slot.low span { color: var(--g-red); }
+      /* right: messages (kill feed and chat move here) */
+      body.rl-hud2 .rl-feed { left: auto !important; right: 24px !important; top: auto !important; bottom: 150px !important; width: 300px !important; align-items: flex-end; gap: 6px !important; z-index: 41; }
+      body.rl-hud2 .rl-feed div { align-self: flex-end !important; padding: 9px 12px !important; font: 500 13px/1 var(--rl-font, Geist, system-ui) !important; color: rgba(255,255,255,.85) !important; }
+      body.rl-hud2 .rl-feed div.me { box-shadow: inset 0 0 0 1px rgba(255,77,94,.6), 0 8px 24px rgba(0,0,0,.18) !important; color: #fff !important; }
+      body.rl-hud2 .rl-chat { left: auto !important; right: 24px !important; bottom: 24px !important; width: 300px !important; align-items: flex-end; }
+      body.rl-hud2 .rl-chat .log { align-items: flex-end; display: flex; flex-direction: column; gap: 6px; }
+      body.rl-hud2 .rl-chat .log div { padding: 9px 12px !important; font: 500 13px/1.3 var(--rl-font, Geist, system-ui) !important; max-width: 300px; }
+      body.rl-hud2 .rl-chat .box { padding: 6px !important; }
+      body.rl-hud2 .rl-chat input { background: transparent !important; box-shadow: none !important; color: #fff !important; font: 500 13px/1 var(--rl-font, Geist, system-ui) !important; }
+      body.rl-hud2 .rl-chat .quick span { background: rgba(255,255,255,.08) !important; }
+      @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { :root { --g-fill: rgba(22,22,26,.72); } }
+      html.h2-nomap .h2 .map { display: none; }`;
+    document.head.appendChild(css);
+    Test.noglass && document.documentElement.style.setProperty("--g-blur", "none");
+    Test.nominimap && document.documentElement.classList.add("h2-nomap");
+    const el = (this.el = document.createElement("div"));
+    el.className = "h2";
+    el.innerHTML = `
+      <div class="g vit"><div class="sh">${I.shield}<div class="bar"><b></b><i></i></div><span class="n"></span></div><div class="hp">${I.heart}<div class="bar"><b></b><i></i></div><span class="n"></span></div></div>
+      <div class="stats"><div class="g pill left">${I.persons}<span></span></div><div class="g pill kills">${I.target}<span></span></div><div class="g pill storm">${I.clock}<span></span></div><div class="g pill wp">${I.pin}<span></span></div></div>
+      <i class="shade"></i><div class="g map"><canvas class="gl"></canvas><canvas class="mk"></canvas><i class="tint"></i><i class="pulse"></i><div class="me">${I.arrow}</div></div><div class="g maphint"><span><b>Click</b> set waypoint</span><span><b>Right-click</b> clear</span><span><b>Drag</b> move</span><span><b>Scroll</b> zoom</span><span><b>M</b> close</span></div>
+      <div class="g inv"></div>`;
+    document.body.appendChild(el);
+    document.body.classList.add("rl-hud2");
+    const $ = (q) => el.querySelector(q);
+    this.$ = { vit: $(".vit"), hpI: $(".hp .bar i"), hpB: $(".hp .bar b"), hpN: $(".hp .n"), hp: $(".hp"), shI: $(".sh .bar i"), shB: $(".sh .bar b"), shN: $(".sh .n"), left: $(".pill.left span"), kills: $(".pill.kills span"), killsP: $(".pill.kills"), storm: $(".pill.storm"), stormT: $(".pill.storm span"), map: $(".map"), gl: $(".map canvas.gl"), mk: $(".map canvas.mk"), me: $(".map .me"), pulse: $(".map .pulse"), inv: $(".inv"), wp: $(".pill.wp"), wpT: $(".pill.wp span") };
+    window.__HUD2obj = this;
+    this._last = {};
+    this._atlas();
+    this._keys();
+    let f = 0;
+    const tick = () => (this.update(++f), requestAnimationFrame(tick));
+    requestAnimationFrame(tick);
+  },
+  _set(k, v, fn) { if (this._last[k] !== v) ((this._last[k] = v), fn(v)); },
+  // ---- the map --------------------------------------------------------------
+  // The baked height map becomes one mesh of the whole planet (a 768 x 384
+  // longitude/latitude grid: about 22 cm between points, so walls stand up
+  // straight), built once. Each frame only moves a camera: just behind and above
+  // you for the minimap, high over the planet for the big map. Faces are lit flat
+  // from their own slope: roofs, walls, ground and sea in dark greys; colour is
+  // kept for what matters (storm, route, waypoint, players).
+  SEA: 22.05,
+  _atlas() {
+    const cv = this.$.gl, gl = cv.getContext("webgl2", { alpha: !1, antialias: !0, premultipliedAlpha: !1 });
+    if (!gl) return console.warn("[hud2] no WebGL 2 for the map");
+    const sh = (t, src) => { const x = gl.createShader(t); gl.shaderSource(x, src); gl.compileShader(x); gl.getShaderParameter(x, gl.COMPILE_STATUS) || console.warn("[hud2] map shader", gl.getShaderInfoLog(x)); return x; };
+    const pr = gl.createProgram();
+    gl.attachShader(pr, sh(gl.VERTEX_SHADER, `#version 300 es
+      in vec3 p; in float k; uniform mat4 VP; out vec3 wp; out float kk;
+      void main() { wp = p; kk = k; gl_Position = VP * vec4(p, 1.); }`));
+    gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, `#version 300 es
+      precision highp float; in vec3 wp; in float kk; out vec4 o;
+      uniform vec3 L, E; uniform vec4 S; uniform float fogN, fogF;
+      void main() {
+        vec3 n = normalize(cross(dFdx(wp), dFdy(wp))), up = normalize(wp);
+        if (dot(n, E - wp) < 0.) n = -n;
+        float c = floor(kk + .5), t = dot(n, up);
+        vec3 col;
+        if (c < .5) col = vec3(.085, .088, .115);
+        else if (c > 2.5) col = vec3(.115, .12, .155);
+        else if (t > .8) col = mix(vec3(.18, .18, .205), vec3(.46, .46, .50), smoothstep(23.5, 33., length(wp)));
+        else col = mix(vec3(.25, .25, .28), vec3(.34, .34, .375), smoothstep(23.5, 33., length(wp)));
+        col *= .70 + .50 * clamp(dot(n, L), 0., 1.);
+        if (S.w < 3.13) {
+          float a = acos(clamp(dot(up, S.xyz), -1., 1.));
+          col = mix(col, col * .55 + vec3(.26, .04, .17), smoothstep(S.w - .004, S.w + .004, a) * .85);
+          col = mix(col, vec3(1., .31, .63), (1. - smoothstep(0., .006 + .0005 * fogF, abs(a - S.w))) * .9);
+        }
+        col = mix(col, vec3(.062, .062, .078), smoothstep(fogN, fogF, length(E - wp)));
+        o = vec4(col, 1.);
+      }`));
+    gl.bindAttribLocation(pr, 0, "p"); gl.bindAttribLocation(pr, 1, "k"); gl.linkProgram(pr);
+    const u = {}; ["VP", "L", "E", "S", "fogN", "fogF"].forEach((k) => (u[k] = gl.getUniformLocation(pr, k)));
+    Object.assign(this, { gl, pr, u, ready: 0, cam: new PerspectiveCamera(46, 1.6, 0.3, 400), wpt: null, route: null, bigT: 0, big: !1, zoom: 1 });
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas"); c.width = img.width; c.height = img.height;
+      const x = c.getContext("2d", { willReadFrequently: !0 }); x.drawImage(img, 0, 0);
+      const d = x.getImageData(0, 0, c.width, c.height).data, W = c.width, H = c.height, rad = new Float32Array(W * H), cls = new Uint8Array(W * H);
+      for (let i = 0, j = 0; i < d.length; i += 4, j++) { rad[j] = (((d[i] << 8) | d[i + 1]) / 65535) * 64; cls[j] = d[i + 2]; }
+      // clean shapes: an opening (shrink, then grow back) removes poles, posts,
+      // trunks and single-texel spikes (anything under ~0.5 m across) and keeps
+      // buildings, walls and cliffs exactly as they are
+      const pass = (src, dx, dy, fn) => { const out = new Float32Array(W * H), K = 3;
+        for (let y = 0; y < H; y++) for (let x0 = 0; x0 < W; x0++) { let m = src[y * W + x0];
+          for (let k = 1; k <= K; k++) { const a = src[Math.min(H - 1, Math.max(0, y + dy * k)) * W + ((x0 + dx * k + W) % W)], b = src[Math.min(H - 1, Math.max(0, y - dy * k)) * W + ((x0 - dx * k + W) % W)]; m = fn(m, a, b); }
+          out[y * W + x0] = m; }
+        return out; };
+      const mn = (m, a, b) => Math.min(m, a, b), mx = (m, a, b) => Math.max(m, a, b);
+      let f2 = pass(pass(rad, 1, 0, mn), 0, 1, mn); f2 = pass(pass(f2, 1, 0, mx), 0, 1, mx);
+      for (let k = 0; k < W * H; k++) if (cls[k]) rad[k] = f2[k];
+      Object.assign(this, { mW: W, mH: H, rad, cls });
+      // the planet mesh
+      const GW = 512, GH = 256, TS = 32, nv = (GW + 1) * (GH + 1), pos = new Float32Array(nv * 3), kind = new Uint8Array(nv);
+      for (let j = 0, v = 0; j <= GH; j++) {
+        const th = (j / GH) * Math.PI, st = Math.sin(th), ct = Math.cos(th);
+        for (let i = 0; i <= GW; i++, v++) {
+          const ph = (i / GW) * Math.PI * 2, k = this._at(ph, th), r = this._r(k);
+          pos[v * 3] = st * Math.cos(ph) * r; pos[v * 3 + 1] = ct * r; pos[v * 3 + 2] = st * Math.sin(ph) * r; kind[v] = cls[k];
+        }
+      }
+      // indices laid out tile by tile (32 x 32 cells), so a tile is one index range
+      // and only tiles near the camera are drawn
+      const idx = new Uint32Array(GW * GH * 6), tiles = [];
+      let q = 0;
+      for (let ty = 0; ty < GH; ty += TS) for (let tx = 0; tx < GW; tx += TS) {
+        const start = q;
+        for (let j = ty; j < Math.min(GH, ty + TS); j++) for (let i = tx; i < Math.min(GW, tx + TS); i++) { const a = j * (GW + 1) + i, b = a + GW + 1; idx.set([a, b, a + 1, a + 1, b, b + 1], q); q += 6; }
+        const th = ((ty + TS / 2) / GH) * Math.PI, ph = ((tx + TS / 2) / GW) * Math.PI * 2;
+        tiles.push({ start, count: q - start, c: new Vector3(Math.sin(th) * Math.cos(ph), Math.cos(th), Math.sin(th) * Math.sin(ph)), r: Math.max(TS / GW * Math.PI * 2 * Math.max(0.05, Math.sin(th)), TS / GH * Math.PI) * 0.75 });
+      }
+      const va = gl.createVertexArray(); gl.bindVertexArray(va);
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, !1, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER, kind, gl.STATIC_DRAW); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 1, gl.UNSIGNED_BYTE, !1, 0, 0);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer()); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+      Object.assign(this, { va, nIdx: idx.length, tiles, ready: 1 });
+    };
+    img.src = "/assets/images/minimap.png";
+  },
+  // the baked texel under a direction (phi around the equator, theta from the north pole)
+  _at(ph, th) { const W = this.mW, H = this.mH, x = Math.floor((((ph / (Math.PI * 2)) % 1) + 1) % 1 * W) % W, y = Math.min(H - 1, Math.max(0, Math.floor((th / Math.PI) * H))); return y * W + x; },
+  _r(k) { const c = this.cls[k], r = this.rad[k]; return c === 0 ? this.SEA : c === 3 ? Math.max(r, this.SEA - 0.05) : r; },
+  _ground(p) { const l = p.length() || 1; return this._r(this._at(Math.atan2(p.z, p.x), Math.acos(Math.max(-1, Math.min(1, p.y / l))))); },
+  _keys() {
+    addEventListener("keydown", (e) => {
+      if (e.code === "Escape" && this.big) return (e.stopPropagation(), e.preventDefault(), this.toggle(!1));
+      if (e.code !== "KeyM" || e.repeat || window.__Chatting || !this.el.classList.contains("on")) return;
+      if (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+      e.preventDefault(); this.toggle();
+    }, !0);
+    // the big map's mouse: handled here, on the window, before the game sees it
+    // (it would otherwise fire, aim or grab the mouse), then kept from the game
+    const map = this.$.map, ndc = (e) => { const r = map.getBoundingClientRect(); return [((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1]; };
+    let drag = null;
+    const on = (e) => this.big && map.contains(e.target);
+    const take = (e) => (e.stopPropagation(), e.cancelable && e.type !== "pointerdown" && e.preventDefault());
+    addEventListener("pointerdown", (e) => { if (!on(e)) return; take(e); drag = { x: e.clientX, y: e.clientY, moved: 0, btn: e.button }; }, !0);
+    addEventListener("pointermove", (e) => {
+      if (!drag || !this.big) return;
+      e.stopPropagation();
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y; drag.moved += Math.abs(dx) + Math.abs(dy); drag.x = e.clientX; drag.y = e.clientY;
+      if (drag.moved > 4) { map.classList.add("drag"); this._panBy(-dx, dy); }
+    }, !0);
+    addEventListener("pointerup", (e) => {
+      if (!drag) return;
+      e.stopPropagation(); map.classList.remove("drag");
+      const d = drag; drag = null;
+      if (this.big && d.moved <= 4) d.btn === 2 ? this.setWaypoint(null) : d.btn === 0 && this.setWaypoint(this._pick(...ndc(e)));
+    }, !0);
+    for (const t of ["mousedown", "mouseup", "click", "auxclick", "dblclick"]) addEventListener(t, (e) => on(e) && take(e), !0);
+    addEventListener("contextmenu", (e) => on(e) && (e.stopPropagation(), e.preventDefault()), !0);
+    addEventListener("wheel", (e) => { if (!on(e)) return; e.stopPropagation(); e.preventDefault(); this.zoom = Math.max(0.35, Math.min(2.2, this.zoom * Math.exp(e.deltaY * 0.0012))); }, { capture: !0, passive: !1 });
+  },
+  toggle(open = !this.big) {
+    if (open === this.big) return;
+    this.big = open; window.__MapOpen = open;
+    const me = window.__Game.match.characters._localObject;
+    if (open) { this._pan = me.position.clone().normalize(); this._panF = (this._F || me.position.clone()).clone(); this.zoom = 1; document.pointerLockElement && document.exitPointerLock(); }
+    else { try { const p = document.body.requestPointerLock && document.body.requestPointerLock(); p && p.catch && p.catch(() => {}); } catch (e) {} }
+    this.el.classList.toggle("big", open); document.body.classList.toggle("h2-big", open);
+  },
+  _panBy(dx, dy) {
+    // drag the planet under the camera: turn the view centre about the camera's own axes
+    const s = 0.0016 * this.zoom * (this._bigH || 60) / 30, c = this._pan, f = this._panF, r = this._R.clone().crossVectors(f, c).normalize();
+    c.addScaledVector(r, dx * s).addScaledVector(f, dy * s).normalize();
+    f.addScaledVector(c, -f.dot(c)).normalize();
+  },
+  // a click on the big map -> the point on the ground under it (a march along the view ray)
+  _pick(x, y) {
+    if (!this.rad) return null;
+    const a = new Vector3(x, y, -1).unproject(this.cam), b = new Vector3(x, y, 1).unproject(this.cam), d = b.sub(a).normalize(), p = a.clone();
+    for (let t = 0; t < 400; t += 0.12) {
+      p.copy(a).addScaledVector(d, t);
+      const g = this._ground(p);
+      if (p.length() <= g) return p.setLength(g);
+    }
+    return null;
+  },
+  setWaypoint(p) {
+    this.wpt = p; this.route = null; this._routeAt = 0;
+    p && Foley.play && Foley.play("ui");
+  },
+  // the route: the walkable network from where you stand to the waypoint, refreshed as you move
+  _routeTick(me) {
+    if (!this.wpt) return;
+    const now = performance.now();
+    if (me.position.distanceTo(this.wpt) < 3) return this.setWaypoint(null);
+    if (this.route && now - this._routeAt < 900 && this._routeFrom && this._routeFrom.distanceTo(me.position) < 1.5) return;
+    this._routeAt = now; this._routeFrom = me.position.clone();
+    if (!Nav.init()) return (this.route = [me.position.clone(), this.wpt.clone()]);
+    const a = Nav.nearest(me.position, 3), b = Nav.nearest(this.wpt, 3), path = a >= 0 && b >= 0 ? Nav.path(a, b, 4000) : null;
+    this.route = path ? [me.position.clone(), ...path.map((i) => Nav.P[i]), this.wpt.clone()] : [me.position.clone(), this.wpt.clone()];
+    let L = 0; for (let i = 1; i < this.route.length; i++) L += this.route[i].distanceTo(this.route[i - 1]);
+    this.routeLen = L;
+  },
+  _drawMap(G, dt) {
+    const gl = this.gl, me = G.match && G.match.characters && G.match.characters._localObject;
+    if (!gl || !me) return;
+    const cv = this.$.gl, dpr = Math.min(2, window.devicePixelRatio || 1), w = Math.max(2, Math.round(cv.clientWidth * dpr)), h = Math.max(2, Math.round(cv.clientHeight * dpr));
+    if (cv.width !== w || cv.height !== h) { cv.width = this.$.mk.width = w; cv.height = this.$.mk.height = h; }
+    // you: up, forward, right
+    const A = this._A || (this._A = new Vector3()), F = this._F || (this._F = new Vector3()), R = this._R || (this._R = new Vector3());
+    A.copy(me.position).normalize();
+    F.set(0, 0, 1).applyQuaternion(me.quaternion); F.addScaledVector(A, -F.dot(A));
+    F.lengthSq() < 1e-8 && F.set(1, 0, 0).addScaledVector(A, -A.x); F.normalize(); R.crossVectors(F, A).normalize();
+    // the camera: just behind and above you (minimap), high over the view centre (big map)
+    this.bigT += ((this.big ? 1 : 0) - this.bigT) * Math.min(1, dt * 7);
+    const e = this.bigT, ease = e * e * (3 - 2 * e), P = me.position, cam = this.cam;
+    const sEye = P.clone().addScaledVector(A, 12).addScaledVector(F, -4.6), sLook = P.clone().addScaledVector(F, 1.8);
+    let bEye = sEye, bLook = sLook, bUp = A;
+    if (this._pan) {
+      const c = this._pan, f = this._panF, H = (this._bigH = 34 * this.zoom), Rp = P.length();
+      bLook = c.clone().multiplyScalar(Rp); bEye = c.clone().multiplyScalar(Rp + H).addScaledVector(f, -H * 0.38); bUp = c;
+    }
+    cam.position.copy(sEye).lerp(bEye, ease); cam.up.copy(A).lerp(bUp, ease).normalize();
+    cam.lookAt(sLook.clone().lerp(bLook, ease));
+    cam.aspect = w / h; cam.fov = 48 - 8 * ease; cam.far = 60 + 260 * ease; cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+    const VP = (this._VP || (this._VP = new Matrix4())).multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    // light from the camera's upper left
+    const Lw = new Vector3(-0.45, 0.8, 0.35).applyQuaternion(cam.quaternion).normalize();
+    gl.viewport(0, 0, w, h); gl.clearColor(0.062, 0.062, 0.078, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (this.ready) {
+      gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK); gl.frontFace(gl.CW);
+      gl.useProgram(this.pr); gl.bindVertexArray(this.va);
+      gl.uniformMatrix4fv(this.u.VP, !1, VP.elements); gl.uniform3f(this.u.L, Lw.x, Lw.y, Lw.z); gl.uniform3f(this.u.E, cam.position.x, cam.position.y, cam.position.z);
+      const S = G.match.storm && G.match.storm();
+      S ? gl.uniform4f(this.u.S, S.c.x, S.c.y, S.c.z, S.r) : gl.uniform4f(this.u.S, 0, 1, 0, Math.PI);
+      gl.uniform1f(this.u.fogN, 14 + 120 * ease); gl.uniform1f(this.u.fogF, 34 + 260 * ease);
+      // only the tiles within reach of the view (the planet is small: the far side never shows)
+      const reach = 0.95 + 1.1 * ease, cu = this._cu || (this._cu = new Vector3()); cu.copy(cam.position).normalize().lerp(A, 0.5).normalize();
+      for (const t of this.tiles) Math.acos(Math.max(-1, Math.min(1, t.c.dot(cu)))) - t.r < reach && gl.drawElements(gl.TRIANGLES, t.count, gl.UNSIGNED_INT, t.start * 4);
+    }
+    // overlay: route, waypoint, players, chests, you
+    const x = this.$.mk.getContext("2d"); x.clearRect(0, 0, w, h);
+    const v = this._pv || (this._pv = new Vector3()), to = (p, lift = 0) => {
+      v.copy(p).addScaledVector(p.clone().normalize(), lift).project(cam);
+      return v.z > 1 || v.z < -1 ? null : [(v.x * 0.5 + 0.5) * w, (1 - (v.y * 0.5 + 0.5)) * h, Math.abs(v.x) < 1.1 && Math.abs(v.y) < 1.1];
+    };
+    const grad = (t) => { const s = [[255, 79, 160], [139, 92, 246], [255, 207, 105]], k = Math.min(1.999, t * 2), i = Math.floor(k), f = k - i, a = s[i], b = s[i + 1]; return `rgb(${a.map((c, j) => Math.round(c + (b[j] - c) * f))})`; };
+    if (this.route && this.route.length > 1) {
+      const pts = this.route.map((p) => to(p, 0.25)); let run = 0; const L = this.routeLen || 1;
+      x.lineCap = x.lineJoin = "round";
+      for (const [lw, shadow] of [[(7 + 2 * ease) * dpr, !0], [(4 + 1.5 * ease) * dpr, !1]]) {
+        run = 0;
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1], b = pts[i]; run += this.route[i].distanceTo(this.route[i - 1]);
+          if (!a || !b) continue;
+          x.strokeStyle = shadow ? "rgba(0,0,0,.45)" : grad(run / L); x.lineWidth = lw;
+          x.beginPath(); x.moveTo(a[0], a[1]); x.lineTo(b[0], b[1]); x.stroke();
+        }
+      }
+    }
+    if (this.wpt) {
+      const p = to(this.wpt, 0), q = to(this.wpt, 2.2);
+      if (p && q) {
+        x.strokeStyle = "rgba(255,207,105,.9)"; x.lineWidth = 2 * dpr; x.beginPath(); x.moveTo(p[0], p[1]); x.lineTo(q[0], q[1]); x.stroke();
+        const g = x.createLinearGradient(q[0] - 9 * dpr, q[1] - 9 * dpr, q[0] + 9 * dpr, q[1] + 9 * dpr); g.addColorStop(0, "#ff4fa0"); g.addColorStop(0.5, "#8b5cf6"); g.addColorStop(1, "#ffcf69");
+        x.fillStyle = g; x.beginPath(); x.arc(q[0], q[1], 7 * dpr, 0, Math.PI * 2); x.fill(); x.lineWidth = 2 * dpr; x.strokeStyle = "#fff"; x.stroke();
+      }
+    }
+    const L0 = G.loot;
+    if (L0 && L0.chests) {
+      x.fillStyle = "rgba(255,255,255,.85)";
+      for (const c of L0.chests) { if (c.open) continue; const p = to(c.pos, 0.5); p && p[2] && x.fillRect(p[0] - 2.5 * dpr, p[1] - 2.5 * dpr, 5 * dpr, 5 * dpr); }
+    }
+    const M = G.match, my = M.myId, sq = M.squads;
+    M.characters._charactersObjects.forEach((o, id) => {
+      if (o === me || o.__hide || (o.userData && o.userData.act === 3)) return;
+      const p = to(o.position, 1);
+      p && p[2] && ((x.fillStyle = sq && M.sameTeam(my, id) ? "#ffcf69" : "#ff4fa0"), x.beginPath(), x.arc(p[0], p[1], 4 * dpr, 0, Math.PI * 2), x.fill(), (x.lineWidth = 1.5 * dpr), (x.strokeStyle = "rgba(10,10,14,.8)"), x.stroke());
+    });
+    const mp = to(P, 0.2);
+    if (mp) { const l = `${(mp[0] / w) * 100}%`, t = `${(mp[1] / h) * 100}%`; this.$.me.style.left = this.$.pulse.style.left = l; this.$.me.style.top = this.$.pulse.style.top = t; }
+    // the arrow turns with you on the big map (the minimap is already heading-up)
+    this.$.me.style.transform = this.big ? `rotate(${this._arrowAngle(cam, P, F)}rad)` : "";
+  },
+  _arrowAngle(cam, P, F) { const a = P.clone().project(cam), b = P.clone().addScaledVector(F, 2).project(cam); return Math.atan2(b.x - a.x, b.y - a.y); },
+  // ---- everything else ---------------------------------------------------
+  update(f) {
+    const G = window.__Game || {}, M = G.match, P = G.player, $ = this.$;
+    const live = !!document.querySelector(".rl-map.on");
+    this._set("on", live, (v) => this.el.classList.toggle("on", v));
+    if (!live && this.big) this.toggle(!1);
+    if (!live || !M || !P) return;
+    const now = performance.now(), dt = Math.min(0.1, (now - (this._t || now)) / 1000); this._t = now;
+    // the small minimap refreshes every third frame; the big map every frame
+    const fast = this.big || this.bigT > 0.01;
+    (this._dtAcc = (this._dtAcc || 0) + dt), !Test.nominimap && (fast || f % 3 === 0 || !this.ready) && (this._drawMap(G, this._dtAcc), (this._dtAcc = 0));
+    const meObj = M.characters && M.characters._localObject;
+    meObj && this._routeTick(meObj);
+    this._set("wp", this.wpt ? Math.round(this.routeLen || meObj.position.distanceTo(this.wpt)) : -1, (v) => (this.$.wp.classList.toggle("on", v >= 0), v >= 0 && (this.$.wpT.innerHTML = `${v} <small>m</small>`)));
+    const bar = (I, B, N, v, max, key) => { const r = max ? Math.max(0, Math.min(1, v / max)) : 0; this._set(key, Math.round(r * 400), () => ((I.style.width = B.style.width = `${r * 100}%`), (N.textContent = String(Math.ceil(v))))); return r; };
+    const hp = bar($.hpI, $.hpB, $.hpN, P.health, P.maxHealth, "hp");
+    bar($.shI, $.shB, $.shN, P.shield, P.maxShield, "sh");
+    this._set("low", hp < 0.3, (v) => $.hp.classList.toggle("low", v));
+    const st = M.state || {};
+    this._set("left", st.alive || 0, (v) => ($.left.innerHTML = v ? `${v} <small>left</small>` : "—"));
+    this._set("kills", M.kills || 0, (v) => { $.kills.innerHTML = `${v} <small>${v === 1 ? "elim" : "elims"}</small>`; v && ($.killsP.classList.remove("pop"), void $.killsP.offsetWidth, $.killsP.classList.add("pop")); });
+    const S = M.storm && M.storm(), me = M.characters && M.characters._localObject;
+    const clock = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+    const txt = !S ? "Safe" : S.wait > 0 ? `${clock(S.wait)} <small>storm</small>` : S.left > 0 ? `${clock(S.left)} <small>closing</small>` : `<small>final zone</small>`;
+    this._set("storm", txt, (v) => ($.stormT.innerHTML = v));
+    this._set("closing", !!(S && S.wait <= 0 && S.left > 0), (v) => $.storm.classList.toggle("closing", v));
+    let inStorm = !1;
+    if (S && me && S.r < Math.PI - 0.01) { const p = me.position, l = p.length() || 1; inStorm = Math.acos(Math.max(-1, Math.min(1, (p.x * S.c.x + p.y * S.c.y + p.z * S.c.z) / l))) > S.r; }
+    this._set("in", inStorm, (v) => this.el.classList.toggle("in-storm", v));
+    // inventory
+    const inv = G.inventory;
+    if (inv && inv.slots) {
+      const key = inv.slots.map((s) => (s ? `${s.id}.${s.kind === "item" ? s.count : s.mag}` : "-")).join("|") + "#" + inv.sel;
+      this._set("inv", key, () => {
+        const I = this.icons, icon = (s) => (s.kind === "gun" ? I.target : s.id === "shield" ? I.bolt : s.id === "medkit" ? I.plus : I.cube);
+        $.inv.innerHTML = inv.slots.map((s, i) => {
+          if (!s) return `<div class="g slot empty${i === inv.sel ? " sel" : ""}"><span class="k">${i + 1}</span>${I.cube}<b>Empty</b><span></span></div>`;
+          const name = this.names[s.id] || s.id, gun = s.kind === "gun", max = gun && Armory[s.id] ? Armory[s.id].mag : 0;
+          const amt = gun ? `${s.mag}<small style="opacity:.6">/${max}</small>` : `×${s.count}`;
+          return `<div class="g slot${i === inv.sel ? " sel" : ""}${gun && max && s.mag <= Math.max(1, max * 0.2) ? " low" : ""}"><span class="k">${i + 1}</span>${icon(s)}<b>${name}</b><span>${amt}</span>${gun && max ? `<div class="ammo"><i style="width:${(100 * s.mag) / max}%"></i></div>` : ""}</div>`;
+        }).join("");
+      });
+    }
+  },
+};
+(function bootHud2() { const go = () => HUD2.init(); document.body ? go() : document.addEventListener("DOMContentLoaded", go, { once: !0 }); })();
+
 export {
   App3D as A,
   set_active_reaction as a,

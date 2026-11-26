@@ -1,0 +1,1 @@
+{"name":"fused","private":true,"type":"module","scripts":{"static":"node server/static.mjs"},"dependencies":{"ws":"^8.18.0"}}
